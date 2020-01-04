@@ -1,0 +1,352 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Static website hosting with S3 and CloudFront'
+Parameters:
+  DomainName:
+    Description: Base domain name for the site (without www)
+    Type: String
+    Default: domain.com
+    AllowedPattern: "[a-z0-9]+[-.a-z0-9]*(\\.[a-z][a-z]+)+"
+    ConstraintDescription: |
+      Provide a valid domain name using only lowercase letters,
+      numbers, ., and dash (-)
+  RepositoryBranch:
+    Type: String
+    Default: master
+  DefaultRootObject:
+    Description: 'The default path for the index document.'
+    Type: String
+    Default: 'index.html'
+  ErrorPagePath:
+    Description: 'The path of the error page for the website.'
+    Type: String
+    Default: '/404.html' 
+
+
+Mappings:
+  RegionMap:
+    us-east-1:
+      S3hostedzoneID: Z3AQBSTGFYJSTF
+      websiteendpoint: s3-website-us-east-1.amazonaws.com
+    us-west-1:
+      S3hostedzoneID: Z2F56UZL2M1ACD
+      websiteendpoint: s3-website-us-west-1.amazonaws.com
+    us-west-2:
+      S3hostedzoneID: Z3BJ6K6RIION7M
+      websiteendpoint: s3-website-us-west-2.amazonaws.com
+    eu-west-1:
+      S3hostedzoneID: Z1BKCTXD74EZPE
+      websiteendpoint: s3-website-eu-west-1.amazonaws.com
+    ap-southeast-1:
+      S3hostedzoneID: Z3O0J2DXBE1FTB
+      websiteendpoint: s3-website-ap-southeast-1.amazonaws.com
+    ap-southeast-2:
+      S3hostedzoneID: Z1WCIGYICN2BYD
+      websiteendpoint: s3-website-ap-southeast-2.amazonaws.com
+    ap-northeast-1:
+      S3hostedzoneID: Z2M4EHUR26P7ZW
+      websiteendpoint: s3-website-ap-northeast-1.amazonaws.com
+    sa-east-1:
+      S3hostedzoneID: Z31GFT0UA1I2HV
+      websiteendpoint: s3-website-sa-east-1.amazonaws.com  
+
+Resources:
+
+##Base domain in S3
+  BaseS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties: 
+      BucketName:
+        !Sub ${DomainName} 
+      AccessControl: PublicRead
+      VersioningConfiguration:
+        Status: Enabled
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: 404.html
+
+##WWW domain in S3
+  RedirectS3Bucket:
+    Type: AWS::S3::Bucket
+    Properties: 
+      BucketName: 
+        !Sub www.${DomainName} 
+      AccessControl: PublicRead
+      WebsiteConfiguration:
+        RedirectAllRequestsTo:
+          HostName: 
+            !Ref DomainName
+          Protocol: https
+
+##Logs Bucket in S3
+  LogBucket:
+    Type: "AWS::S3::Bucket"
+    Properties: 
+      BucketName: !Sub ${DomainName}-logs
+
+
+##SSL Cert - Require to finish validation process in certificate manager
+  SSLCert:
+    Type: "AWS::CertificateManager::Certificate"
+    Properties: 
+      DomainName: !Ref DomainName
+      SubjectAlternativeNames:
+        - !Sub "*.${DomainName}"
+      ValidationMethod: DNS
+
+##Base S3 CloudFront Bucket Policy
+  CloudFrontOriginAccessIdentity:
+    Type: 'AWS::CloudFront::CloudFrontOriginAccessIdentity'
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Ref BaseS3Bucket
+
+  ReadPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref BaseS3Bucket
+      PolicyDocument:
+        Statement:
+        - Action: 's3:GetObject'
+          Effect: Allow
+          Resource: !Sub 'arn:aws:s3:::${BaseS3Bucket}/*'
+          Principal:
+            CanonicalUser: !GetAtt CloudFrontOriginAccessIdentity.S3CanonicalUserId
+
+##CloudFront
+  CloudFrontDistribution:
+    Type: 'AWS::CloudFront::Distribution'
+    Properties:
+      DistributionConfig:
+        Origins:
+        - DomainName: !GetAtt 'BaseS3Bucket.DomainName'
+          Id: !Sub 'S3-${BaseS3Bucket}' #need to match TargetOrginId
+          S3OriginConfig:
+            OriginAccessIdentity: !Sub 'origin-access-identity/cloudfront/${CloudFrontOriginAccessIdentity}'
+        Enabled: true
+        HttpVersion: http2
+        Aliases:
+          - !Ref DomainName
+        PriceClass: 'PriceClass_100'
+        DefaultCacheBehavior:
+          AllowedMethods:
+          - GET
+          - HEAD
+          - OPTIONS
+          CachedMethods:
+          - GET
+          - HEAD
+          - OPTIONS
+          Compress: true
+          DefaultTTL: 3600 # in seconds
+          ForwardedValues:
+            Cookies:
+              Forward: none
+            QueryString: false
+          MaxTTL: 86400 # in seconds
+          MinTTL: 60 # in seconds
+          TargetOriginId: !Sub 'S3-${BaseS3Bucket}' #need to match Id
+          ViewerProtocolPolicy: 'redirect-to-https'
+        DefaultRootObject: !Ref DefaultRootObject
+        ViewerCertificate:
+          AcmCertificateArn: !Ref SSLCert
+          SslSupportMethod:  sni-only
+          MinimumProtocolVersion: TLSv1.1_2016
+        CustomErrorResponses:
+        - ErrorCode: 403 # not found
+          ResponseCode: 404
+          ResponsePagePath: !Ref ErrorPagePath
+
+##CloudFront Redirect
+  CloudFrontDistributionRedirect:
+    Type: 'AWS::CloudFront::Distribution'
+    Properties:
+      DistributionConfig:
+        Origins:
+        - DomainName:
+            !Join [
+                "",
+                [
+                  !Ref RedirectS3Bucket,
+                  ".",
+                  !FindInMap [RegionMap, !Ref "AWS::Region", websiteendpoint],
+                ],
+              ]
+          Id: !Sub 'S3-${RedirectS3Bucket}' #need to match TargetOrginId
+          CustomOriginConfig:
+            HTTPPort: 80
+            HTTPSPort: 443
+            OriginProtocolPolicy: http-only
+          #S3OriginConfig:
+            #OriginAccessIdentity: !Sub 'origin-access-identity/cloudfront/${CloudFrontOriginAccessIdentityRedirect}'
+        Enabled: true
+        HttpVersion: http2
+        Aliases:
+          - !Sub www.${DomainName}
+        PriceClass: 'PriceClass_100'
+        DefaultCacheBehavior:
+          AllowedMethods:
+          - GET
+          - HEAD
+          - OPTIONS
+          CachedMethods:
+          - GET
+          - HEAD
+          - OPTIONS
+          Compress: true
+          DefaultTTL: 3600 # in seconds
+          ForwardedValues:
+            Cookies:
+              Forward: none
+            QueryString: false
+          MaxTTL: 86400 # in seconds
+          MinTTL: 60 # in seconds
+          TargetOriginId: !Sub 'S3-${RedirectS3Bucket}' #need to match Id
+          ViewerProtocolPolicy: 'redirect-to-https'
+        ViewerCertificate:
+          AcmCertificateArn: !Ref SSLCert
+          SslSupportMethod:  sni-only
+          MinimumProtocolVersion: TLSv1.1_2016
+        CustomErrorResponses:
+        - ErrorCode: 403 # not found
+          ResponseCode: 404
+          ResponsePagePath: !Ref ErrorPagePath        
+  
+##Route 53
+  BaseDomainRoute53:
+    Type: "AWS::Route53::RecordSet"
+    Properties: 
+      AliasTarget: 
+        HostedZoneId: Z2FDTNDATAQYW2
+        DNSName: !GetAtt CloudFrontDistribution.DomainName
+      Comment: Route to CloudFront distribution
+      HostedZoneName: !Sub ${DomainName}.
+      Name: !Sub ${DomainName}.
+      Type: A
+
+  RedirectDomainRoute53:
+    Type: "AWS::Route53::RecordSet"
+    Properties: 
+      AliasTarget: 
+        HostedZoneId: Z2FDTNDATAQYW2
+        DNSName: !GetAtt CloudFrontDistributionRedirect.DomainName
+      Comment: Route to CloudFront distribution redirect
+      HostedZoneName: !Sub ${DomainName}.
+      Name: !Sub www.${DomainName}.
+      Type: A
+
+
+##Code Commit
+  CodeCommitRepo:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      RepositoryName: !Ref AWS::StackName
+      RepositoryDescription: CodeCommit Repository
+
+
+##Code Build
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    DependsOn: CodeBuildRole
+    Properties:
+      Name: !Sub ${AWS::StackName}CodeBuildProject
+      ServiceRole: !Ref CodeBuildRole
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:1.0
+        EnvironmentVariables: 
+          - 
+            Name: Website_S3Bucket
+            Value: !Join
+                - ""
+                - - "s3://"
+                  - !Ref BaseS3Bucket
+            Type: PLAINTEXT
+      Source:
+        Type: CODECOMMIT
+        Location:
+          Fn::Join:
+            - ""
+            - - "https://git-codecommit."
+              - Ref: AWS::Region
+              - ".amazonaws.com/v1/repos/"
+              - Ref: AWS::StackName
+      SourceVersion: refs/heads/master
+
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          Effect: Allow
+          Principal:
+            Service: codebuild.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+
+  
+##CodePipeLine
+  CodePipelineRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+        Path: /
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/AdministratorAccess
+
+  ArtifactStoreBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        VersioningConfiguration:
+          Status: Enabled
+        AccessControl: BucketOwnerFullControl
+
+  CodePipelineStack:
+    Type: AWS::CodePipeline::Pipeline
+    DependsOn: CodePipelineRole
+    Properties:
+      RoleArn: !GetAtt [CodePipelineRole, Arn]
+      ArtifactStore:
+        Location: !Ref ArtifactStoreBucket
+        Type: S3
+      Stages:
+        - Name: Source
+          Actions:
+          - InputArtifacts: []
+            Name: Source
+            ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: 1
+                Provider: CodeCommit
+            OutputArtifacts:
+                - Name: MyApp
+            Configuration:
+                BranchName: !Ref RepositoryBranch
+                RepositoryName: !Ref AWS::StackName
+        - 
+          Name: Build
+          Actions:
+          - 
+            Name: Build
+            ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+            InputArtifacts:
+                - Name: MyApp
+            OutputArtifacts:
+                - Name: MyAppBuild
+            Configuration:
+                ProjectName: !Ref CodeBuildProject
