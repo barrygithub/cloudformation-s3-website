@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Static website hosting with S3 and CloudFront'
+Description: 'S3 Static website hosting with CloudFront'
 Parameters:
   DomainName:
     Description: Base domain name for the site (without www)
@@ -21,7 +21,7 @@ Parameters:
     Type: String
     Default: '/404.html' 
 
-
+##Region Mappings
 Mappings:
   RegionMap:
     us-east-1:
@@ -176,8 +176,6 @@ Resources:
             HTTPPort: 80
             HTTPSPort: 443
             OriginProtocolPolicy: http-only
-          #S3OriginConfig:
-            #OriginAccessIdentity: !Sub 'origin-access-identity/cloudfront/${CloudFrontOriginAccessIdentityRedirect}'
         Enabled: true
         HttpVersion: http2
         Aliases:
@@ -235,7 +233,7 @@ Resources:
       Type: A
 
 
-##Code Commit
+##CodeCommit
   CodeCommitRepo:
     Type: AWS::CodeCommit::Repository
     Properties:
@@ -243,7 +241,7 @@ Resources:
       RepositoryDescription: CodeCommit Repository
 
 
-##Code Build
+##CodeBuild
   CodeBuildProject:
     Type: AWS::CodeBuild::Project
     DependsOn: CodeBuildRole
