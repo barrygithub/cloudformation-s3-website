@@ -3,8 +3,8 @@
 
 ## Features
 * Automate build with CodeCommit, CodePipline and CodeBuild.
-* Uses Cloudfront to deliver content.
-* S3 and S3 redirect setup for base and www domain.
+* Uses Cloudfront to improve content delivery performance.
+* S3 and S3 redirect setup for base and www domain with Route53.
 
 ![Imgur](https://i.imgur.com/djiSTmj.png)
 
