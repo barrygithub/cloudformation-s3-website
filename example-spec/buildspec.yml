@@ -1,0 +1,20 @@
+version: 0.2
+
+phases: 
+    install:
+        runtime-versions:
+            nodejs: 10
+        commands:
+            - echo "install phase"
+    pre_build:
+        commands: 
+            - echo "pre build phase"
+    build:
+        commands:
+            - echo "we are in the build block"
+            - echo "we will run some tests"
+            - cat index.html #Test to make sure file exist
+    post_build:
+        commands:
+            - aws s3 sync ./ s3://Replace-With-Your-Domain-Name.com
+            
