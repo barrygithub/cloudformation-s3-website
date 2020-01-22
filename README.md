@@ -14,7 +14,6 @@ To begin using this site, choose one of the following options to get started:
 * Fork the repo.
 
 ## Start the project
-The project is started with the regular node commands.
 
 1. Upload template through Cloudformation console to start.
 2. When prompted in event viewer, verify certificate with Certificate Manager and Route53.
